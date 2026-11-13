@@ -28,19 +28,24 @@ jobs:
 
     runs-on: ${{ matrix.platform }}
 
-  steps:
+steps:
       - name: Checkout repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@v4
 
       - name: Setup Node.js
-        uses: actions/setup-node@v5
+        uses: actions/setup-node@v4
         with:
           node-version: 20
 
-      - name: Install Rust toolchain
+      - name: Install Rust toolchain (Windows)
+        if: matrix.platform == 'windows-latest'
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Rust toolchain (macOS)
+        if: matrix.platform == 'macos-latest'
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
 
       - name: Rust cache
         uses: swatinem/rust-cache@v2
@@ -58,14 +63,14 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tagName: ${{ startsWith(github.ref, 'refs/tags/v') && 'v__VERSION__' || '' }}
-          releaseName: ${{ startsWith(github.ref, 'refs/tags/v') && 'Shoot Studio v__VERSION__' || '' }}
+          tagName: v__VERSION__
+          releaseName: 'Shoot Studio v__VERSION__'
           releaseBody: 'Automated production release installers for Windows (.exe/.msi) and macOS (.dmg).'
           releaseDraft: true
           prerelease: false
           args: ${{ matrix.args }}
 
-       - name: Upload installer artifacts
+      - name: Upload installer artifacts
         uses: actions/upload-artifact@v4
         with:
           name: shoot-studio-${{ matrix.artifact_label }}
