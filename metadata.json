@@ -1,0 +1,8 @@
+{
+  "name": "Shoot Studio",
+  "description": "Cross-platform RAW culling, Lightroom-style grading, interactive watermarking, and multithreaded batch export studio.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
