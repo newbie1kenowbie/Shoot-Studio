@@ -48,7 +48,7 @@ jobs:
           workspaces: './src-tauri -> target'
 
       - name: Install frontend dependencies
-        run: npm install
+        run: npm install --legacy-peer-deps
 
       - name: Generate native Tauri app icons (.icns / .ico)
         run: npm run tauri -- icon public/shoot-studio-logo.png
