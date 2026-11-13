@@ -68,6 +68,7 @@ jobs:
           releaseBody: 'Automated production release installers for Windows (.exe/.msi) and macOS (.dmg).'
           releaseDraft: true
           prerelease: false
+          useBun: false
           args: ${{ matrix.args }}
 
       - name: Upload installer artifacts
