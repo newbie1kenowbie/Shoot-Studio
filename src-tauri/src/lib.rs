@@ -4,7 +4,7 @@ mod raw_cr3;
 
 use culling::{analyze_shoot_frames, CullingInput, CullingResult};
 use export::{run_parallel_batch_export, BatchExportSummary, ExportPhotoItem, WatermarkSettings};
-use raw_cr3::resolve_preview_and_dimensions;
+use raw_cr3::{resolve_preview_and_dimensions, ExtractedExif};
 use serde::Serialize;
 use std::path::PathBuf;
 use walkdir::WalkDir;
@@ -21,6 +21,7 @@ pub struct ScannedPhoto {
     pub height: u32,
     pub file_size_bytes: u64,
     pub is_raw: bool,
+    pub exif: ExtractedExif,
 }
 
 #[tauri::command]
@@ -65,7 +66,8 @@ fn scan_folder(folder_path: String, app: tauri::AppHandle) -> Result<Vec<Scanned
             .unwrap_or("image")
             .to_string();
 
-        if let Ok((preview_path, width, height)) = resolve_preview_and_dimensions(&path, &cache_dir)
+        if let Ok((preview_path, width, height, exif)) =
+            resolve_preview_and_dimensions(&path, &cache_dir)
         {
             photos.push(ScannedPhoto {
                 id: path.to_string_lossy().to_string(),
@@ -77,6 +79,7 @@ fn scan_folder(folder_path: String, app: tauri::AppHandle) -> Result<Vec<Scanned
                 height,
                 file_size_bytes,
                 is_raw: ext == "cr3",
+                exif,
             });
         }
     }

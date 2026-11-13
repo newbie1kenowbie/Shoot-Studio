@@ -20,6 +20,14 @@ export interface TauriScannedPhoto {
   height: number;
   fileSizeBytes: number;
   isRaw: boolean;
+  exif?: {
+    camera?: string | null;
+    lens?: string | null;
+    focalLength?: string | null;
+    aperture?: string | null;
+    shutterSpeed?: string | null;
+    iso?: number | null;
+  };
 }
 
 export interface TauriCullingResult {
@@ -67,12 +75,21 @@ async function filesToPhotoItems(files: File[]): Promise<PhotoItem[]> {
       let previewUrl = '';
       let width = 1600;
       let height = 1200;
+      let parsedExif: {
+        camera?: string;
+        lens?: string;
+        focalLength?: string;
+        aperture?: string;
+        shutterSpeed?: string;
+        iso?: number;
+      } = {};
 
       if (isRaw) {
         const extracted = await extractCr3PreviewInBrowser(file);
         previewUrl = extracted.previewUrl;
         width = extracted.width;
         height = extracted.height;
+        parsedExif = extracted.exif ?? {};
       } else {
         previewUrl = URL.createObjectURL(file);
         const dims = await getImageDimensions(previewUrl);
@@ -98,12 +115,12 @@ async function filesToPhotoItems(files: File[]): Promise<PhotoItem[]> {
         cullReason: null,
         adjustments: { ...DEFAULT_ADJUSTMENTS },
         exif: {
-          camera: isRaw ? 'Canon EOS R5' : 'Lokale Import',
-          lens: isRaw ? 'RF 50mm F1.2L' : 'Standaard profiel',
-          focalLength: '50mm',
-          aperture: 'f/2.0',
-          shutterSpeed: '1/500s',
-          iso: 200,
+          camera: parsedExif.camera || (isRaw ? 'Canon EOS R-serie' : 'Lokale Import'),
+          lens: parsedExif.lens || (isRaw ? 'Canon RF-objectief' : 'Standaard profiel'),
+          focalLength: parsedExif.focalLength || '50mm',
+          aperture: parsedExif.aperture || 'f/2.0',
+          shutterSpeed: parsedExif.shutterSpeed || '1/500s',
+          iso: parsedExif.iso || 200,
         },
         sourceFile: file,
       });
@@ -199,12 +216,14 @@ export async function openSourceFolder(): Promise<FolderLoadResult | null> {
       cullReason: null,
       adjustments: { ...DEFAULT_ADJUSTMENTS },
       exif: {
-        camera: item.isRaw ? 'Canon EOS R-serie' : 'Lokale bron',
-        lens: item.isRaw ? 'Canon RF-objectief' : 'Systeembestand',
-        focalLength: item.isRaw ? '50mm' : '—',
-        aperture: item.isRaw ? 'f/1.8' : '—',
-        shutterSpeed: item.isRaw ? '1/1000s' : '—',
-        iso: item.isRaw ? 160 : 100,
+        camera:
+          item.exif?.camera || (item.isRaw ? 'Canon EOS R-serie' : 'Lokale bron'),
+        lens:
+          item.exif?.lens || (item.isRaw ? 'Canon RF-objectief' : 'Systeembestand'),
+        focalLength: item.exif?.focalLength || (item.isRaw ? '50mm' : '—'),
+        aperture: item.exif?.aperture || (item.isRaw ? 'f/1.8' : '—'),
+        shutterSpeed: item.exif?.shutterSpeed || (item.isRaw ? '1/1000s' : '—'),
+        iso: item.exif?.iso || (item.isRaw ? 160 : 100),
       },
     }));
 
