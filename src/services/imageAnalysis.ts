@@ -211,6 +211,132 @@ export async function analyzeShootInBrowser(
   });
 }
 
+/**
+ * Fast edge-preserving bilateral noise reduction (luminance + stronger chroma smoothing)
+ * using a precomputed 256-entry luminance range lookup table (zero Math.exp inside pixel loop).
+ */
+export function applyBilateralNoiseReduction(
+  data: Uint8ClampedArray,
+  w: number,
+  h: number,
+  amount: number
+): void {
+  if (amount <= 0 || w < 5 || h < 5) return;
+
+  const strength = Math.min(1, Math.max(0, amount / 100));
+  const sigmaRange = 8 + strength * 42;
+  const invTwoSigmaSq = 1 / (2 * sigmaRange * sigmaRange);
+
+  // Precomputed LUT for |luma_neighbor - luma_center| in 0..255
+  const rangeLut = new Float32Array(256);
+  for (let d = 0; d < 256; d++) {
+    rangeLut[d] = Math.exp(-(d * d) * invTwoSigmaSq);
+  }
+
+  const luma = new Float32Array(w * h);
+  for (let i = 0; i < w * h; i++) {
+    const p = i * 4;
+    luma[i] = 0.2126 * data[p] + 0.7152 * data[p + 1] + 0.0722 * data[p + 2];
+  }
+
+  const src = new Uint8ClampedArray(data);
+  const radius = strength > 0.45 ? 2 : 1;
+  const spatialWeights =
+    radius === 2
+      ? [0.25, 0.6, 1.0, 0.6, 0.25]
+      : [0.55, 1.0, 0.55];
+
+  const lumaBlend = strength * 0.78;
+  const chromaBlend = Math.min(1, strength * 1.15);
+
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const centerIdx = y * w + x;
+      const centerP = centerIdx * 4;
+      const y0 = luma[centerIdx];
+
+      let sumR = 0;
+      let sumG = 0;
+      let sumB = 0;
+      let sumW = 0;
+
+      for (let dy = -radius; dy <= radius; dy++) {
+        const ny = Math.min(h - 1, Math.max(0, y + dy));
+        const wy = spatialWeights[dy + radius];
+        const rowOffset = ny * w;
+
+        for (let dx = -radius; dx <= radius; dx++) {
+          const nx = Math.min(w - 1, Math.max(0, x + dx));
+          const nIdx = rowOffset + nx;
+          const diff = Math.min(255, Math.round(Math.abs(luma[nIdx] - y0)));
+          const weight = wy * spatialWeights[dx + radius] * rangeLut[diff];
+
+          const np = nIdx * 4;
+          sumR += src[np] * weight;
+          sumG += src[np + 1] * weight;
+          sumB += src[np + 2] * weight;
+          sumW += weight;
+        }
+      }
+
+      if (sumW > 0) {
+        const filtR = sumR / sumW;
+        const filtG = sumG / sumW;
+        const filtB = sumB / sumW;
+
+        const origR = src[centerP];
+        const origG = src[centerP + 1];
+        const origB = src[centerP + 2];
+
+        const filtY = 0.2126 * filtR + 0.7152 * filtG + 0.0722 * filtB;
+        const outY = y0 + (filtY - y0) * lumaBlend;
+
+        // Smooth chroma channels stronger than luminance to remove color noise cleanly
+        const origCr = origR - y0;
+        const origCb = origB - y0;
+        const origCg = origG - y0;
+
+        const filtCr = filtR - filtY;
+        const filtCb = filtB - filtY;
+        const filtCg = filtG - filtY;
+
+        const outR = outY + origCr + (filtCr - origCr) * chromaBlend;
+        const outG = outY + origCg + (filtCg - origCg) * chromaBlend;
+        const outB = outY + origCb + (filtCb - origCb) * chromaBlend;
+
+        data[centerP] = Math.min(255, Math.max(0, Math.round(outR)));
+        data[centerP + 1] = Math.min(255, Math.max(0, Math.round(outG)));
+        data[centerP + 2] = Math.min(255, Math.max(0, Math.round(outB)));
+      }
+    }
+  }
+}
+
+export async function renderDenoisedPreviewUrl(
+  srcUrl: string,
+  amount: number
+): Promise<string> {
+  const img = await loadHtmlImage(srcUrl);
+  const srcW = img.naturalWidth || 1280;
+  const srcH = img.naturalHeight || 960;
+  const maxDim = 1200;
+  const scale = Math.min(1, maxDim / Math.max(srcW, srcH));
+  const w = Math.max(8, Math.round(srcW * scale));
+  const h = Math.max(8, Math.round(srcH * scale));
+
+  const canvas = document.createElement('canvas');
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return srcUrl;
+
+  ctx.drawImage(img, 0, 0, w, h);
+  const imgData = ctx.getImageData(0, 0, w, h);
+  applyBilateralNoiseReduction(imgData.data, w, h, amount);
+  ctx.putImageData(imgData, 0, 0);
+  return canvas.toDataURL('image/jpeg', 0.9);
+}
+
 export async function renderGradedPhotoBlob(
   photo: PhotoItem,
   watermark: WatermarkSettings
@@ -230,39 +356,47 @@ export async function renderGradedPhotoBlob(
   ctx.drawImage(img, 0, 0, w, h);
 
   const adj: ColorAdjustments = photo.adjustments;
+  const needsDenoise = adj.noiseReduction > 0;
   const needsGrading =
     adj.exposure !== 0 ||
     adj.contrast !== 0 ||
     adj.whiteBalance !== 0 ||
     adj.saturation !== 0;
 
-  if (needsGrading) {
+  if (needsDenoise || needsGrading) {
     const imgData = ctx.getImageData(0, 0, w, h);
     const data = imgData.data;
-    const exposureMult = Math.pow(2, adj.exposure);
-    const contrastFactor = 1 + (adj.contrast / 100) * 0.85;
-    const wbShift = adj.whiteBalance / 100;
-    const satFactor = 1 + adj.saturation / 100;
-    const rWb = 1 + wbShift * 0.22;
-    const bWb = 1 - wbShift * 0.22;
 
-    for (let i = 0; i < data.length; i += 4) {
-      let r = (data[i] / 255) * exposureMult * rWb;
-      let g = (data[i + 1] / 255) * exposureMult;
-      let b = (data[i + 2] / 255) * exposureMult * bWb;
+    if (needsDenoise) {
+      applyBilateralNoiseReduction(data, w, h, adj.noiseReduction);
+    }
 
-      r = (r - 0.5) * contrastFactor + 0.5;
-      g = (g - 0.5) * contrastFactor + 0.5;
-      b = (b - 0.5) * contrastFactor + 0.5;
+    if (needsGrading) {
+      const exposureMult = Math.pow(2, adj.exposure);
+      const contrastFactor = 1 + (adj.contrast / 100) * 0.85;
+      const wbShift = adj.whiteBalance / 100;
+      const satFactor = 1 + adj.saturation / 100;
+      const rWb = 1 + wbShift * 0.22;
+      const bWb = 1 - wbShift * 0.22;
 
-      const luma = 0.2126 * r + 0.7152 * g + 0.0722 * b;
-      r = luma + (r - luma) * satFactor;
-      g = luma + (g - luma) * satFactor;
-      b = luma + (b - luma) * satFactor;
+      for (let i = 0; i < data.length; i += 4) {
+        let r = (data[i] / 255) * exposureMult * rWb;
+        let g = (data[i + 1] / 255) * exposureMult;
+        let b = (data[i + 2] / 255) * exposureMult * bWb;
 
-      data[i] = Math.min(255, Math.max(0, Math.round(r * 255)));
-      data[i + 1] = Math.min(255, Math.max(0, Math.round(g * 255)));
-      data[i + 2] = Math.min(255, Math.max(0, Math.round(b * 255)));
+        r = (r - 0.5) * contrastFactor + 0.5;
+        g = (g - 0.5) * contrastFactor + 0.5;
+        b = (b - 0.5) * contrastFactor + 0.5;
+
+        const luma = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+        r = luma + (r - luma) * satFactor;
+        g = luma + (g - luma) * satFactor;
+        b = luma + (b - luma) * satFactor;
+
+        data[i] = Math.min(255, Math.max(0, Math.round(r * 255)));
+        data[i + 1] = Math.min(255, Math.max(0, Math.round(g * 255)));
+        data[i + 2] = Math.min(255, Math.max(0, Math.round(b * 255)));
+      }
     }
     ctx.putImageData(imgData, 0, 0);
   }

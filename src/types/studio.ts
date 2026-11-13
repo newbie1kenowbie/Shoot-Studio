@@ -11,6 +11,7 @@ export interface ColorAdjustments {
   contrast: number; // -100 to +100
   whiteBalance: number; // -100 (cool) to +100 (warm)
   saturation: number; // -100 to +100
+  noiseReduction: number; // 0 to 100
 }
 
 export interface WatermarkSettings {
@@ -66,6 +67,7 @@ export const DEFAULT_ADJUSTMENTS: ColorAdjustments = {
   contrast: 0,
   whiteBalance: 0,
   saturation: 0,
+  noiseReduction: 0,
 };
 
 export const DEFAULT_WATERMARK: WatermarkSettings = {

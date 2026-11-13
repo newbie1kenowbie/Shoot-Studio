@@ -8,6 +8,7 @@ import {
   RotateCcw,
   X,
 } from 'lucide-react';
+import { renderDenoisedPreviewUrl } from '../services/imageAnalysis';
 import { CullingStatus, PhotoItem, WatermarkSettings } from '../types/studio';
 
 interface PreviewCanvasProps {
@@ -44,6 +45,8 @@ export function PreviewCanvas({
   const [isDraggingWatermark, setIsDraggingWatermark] = useState(false);
   const [showOriginal, setShowOriginal] = useState(false);
   const [imgError, setImgError] = useState(false);
+  const [denoisedUrl, setDenoisedUrl] = useState<string | null>(null);
+  const [isDenoising, setIsDenoising] = useState(false);
 
   const measureImageBox = () => {
     const stage = stageRef.current;
@@ -76,6 +79,40 @@ export function PreviewCanvas({
       window.removeEventListener('resize', measureImageBox);
     };
   }, [photo?.id, photo?.previewUrl]);
+
+  const noiseLevel = photo?.adjustments.noiseReduction ?? 0;
+
+  useEffect(() => {
+    if (!photo || noiseLevel <= 0 || showOriginal) {
+      setDenoisedUrl(null);
+      setIsDenoising(false);
+      return;
+    }
+
+    let cancelled = false;
+    setIsDenoising(true);
+    const timer = window.setTimeout(async () => {
+      try {
+        const nextUrl = await renderDenoisedPreviewUrl(photo.previewUrl, noiseLevel);
+        if (!cancelled) {
+          setDenoisedUrl(nextUrl);
+        }
+      } catch {
+        if (!cancelled) {
+          setDenoisedUrl(null);
+        }
+      } finally {
+        if (!cancelled) {
+          setIsDenoising(false);
+        }
+      }
+    }, 90);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [photo?.id, photo?.previewUrl, noiseLevel, showOriginal]);
 
   // Compute exact 5x4 color matrix matching the Rust export pipeline
   const colorMatrixValues = useMemo(() => {
@@ -209,7 +246,7 @@ export function PreviewCanvas({
         {!imgError ? (
           <img
             ref={imgRef}
-            src={photo.previewUrl}
+            src={!showOriginal && denoisedUrl ? denoisedUrl : photo.previewUrl}
             alt={photo.fileName}
             referrerPolicy="no-referrer"
             onLoad={measureImageBox}
@@ -317,6 +354,11 @@ export function PreviewCanvas({
         {showOriginal && (
           <div className="absolute top-4 left-1/2 -translate-x-1/2 px-3 py-1 rounded bg-[#111318]/90 border border-[#2C313D] text-xs font-medium text-[#E5E7EB]">
             Origineel (onbewerkt)
+          </div>
+        )}
+        {!showOriginal && isDenoising && (
+          <div className="absolute top-4 right-4 px-2.5 py-1 rounded bg-[#111318]/90 border border-[#2C313D] text-[11px] font-medium text-amber-300">
+            Ruisonderdrukking toepassen...
           </div>
         )}
       </div>

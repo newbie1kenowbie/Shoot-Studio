@@ -362,6 +362,7 @@ export async function runBatchExport(params: {
           contrast: p.adjustments.contrast,
           whiteBalance: p.adjustments.whiteBalance,
           saturation: p.adjustments.saturation,
+          noiseReduction: p.adjustments.noiseReduction,
         },
       })),
       watermark: {

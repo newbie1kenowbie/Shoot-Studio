@@ -16,6 +16,8 @@ pub struct ColorAdjustments {
     pub contrast: f32,    // -100 .. +100
     pub white_balance: f32, // -100 (cool) .. +100 (warm)
     pub saturation: f32,  // -100 .. +100
+    #[serde(default)]
+    pub noise_reduction: f32, // 0 .. 100
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -75,7 +77,11 @@ pub fn run_parallel_batch_export(
         .map(|item| {
             let src_path = Path::new(&item.path);
             let loaded = load_image_for_processing(src_path)?;
-            let mut rgba = apply_color_grading(loaded.to_rgba8(), &item.adjustments);
+            let mut base_rgba = loaded.to_rgba8();
+            if item.adjustments.noise_reduction > 0.0 {
+                base_rgba = apply_noise_reduction(&base_rgba, item.adjustments.noise_reduction);
+            }
+            let mut rgba = apply_color_grading(base_rgba, &item.adjustments);
 
             if let Some(ref wm) = watermark_img {
                 composite_watermark(&mut rgba, wm, &watermark);
@@ -143,6 +149,110 @@ fn apply_color_grading(mut img: RgbaImage, adj: &ColorAdjustments) -> RgbaImage 
     }
 
     img
+}
+
+fn apply_noise_reduction(src: &RgbaImage, amount: f32) -> RgbaImage {
+    let (w, h) = src.dimensions();
+    if amount <= 0.0 || w < 5 || h < 5 {
+        return src.clone();
+    }
+
+    let strength = (amount / 100.0).clamp(0.0, 1.0);
+    let sigma_range = 8.0 + strength * 42.0;
+    let inv_two_sigma_sq = 1.0 / (2.0 * sigma_range * sigma_range);
+
+    let mut range_lut = [0.0f32; 256];
+    for (d, slot) in range_lut.iter_mut().enumerate() {
+        let df = d as f32;
+        *slot = (-(df * df) * inv_two_sigma_sq).exp();
+    }
+
+    let src_raw = src.as_raw();
+    let total_px = (w * h) as usize;
+    let mut luma = vec![0.0f32; total_px];
+    for i in 0..total_px {
+        let p = i * 4;
+        luma[i] = 0.2126 * src_raw[p] as f32
+            + 0.7152 * src_raw[p + 1] as f32
+            + 0.0722 * src_raw[p + 2] as f32;
+    }
+
+    let radius: i32 = if strength > 0.45 { 2 } else { 1 };
+    let spatial: &[f32] = if radius == 2 {
+        &[0.25, 0.6, 1.0, 0.6, 0.25]
+    } else {
+        &[0.55, 1.0, 0.55]
+    };
+
+    let luma_blend = strength * 0.78;
+    let chroma_blend = (strength * 1.15).min(1.0);
+    let mut out = src.clone();
+    let out_raw = out.as_mut();
+
+    for y in 0..h as i32 {
+        for x in 0..w as i32 {
+            let c_idx = (y as u32 * w + x as u32) as usize;
+            let c_p = c_idx * 4;
+            let y0 = luma[c_idx];
+
+            let mut sum_r = 0.0f32;
+            let mut sum_g = 0.0f32;
+            let mut sum_b = 0.0f32;
+            let mut sum_w = 0.0f32;
+
+            for dy in -radius..=radius {
+                let ny = (y + dy).clamp(0, h as i32 - 1) as u32;
+                let wy = spatial[(dy + radius) as usize];
+                let row_off = (ny * w) as usize;
+
+                for dx in -radius..=radius {
+                    let nx = (x + dx).clamp(0, w as i32 - 1) as u32;
+                    let n_idx = row_off + nx as usize;
+                    let diff = (luma[n_idx] - y0).abs().round().min(255.0) as usize;
+                    let weight = wy * spatial[(dx + radius) as usize] * range_lut[diff];
+
+                    let np = n_idx * 4;
+                    sum_r += src_raw[np] as f32 * weight;
+                    sum_g += src_raw[np + 1] as f32 * weight;
+                    sum_b += src_raw[np + 2] as f32 * weight;
+                    sum_w += weight;
+                }
+            }
+
+            if sum_w > 0.0 {
+                let filt_r = sum_r / sum_w;
+                let filt_g = sum_g / sum_w;
+                let filt_b = sum_b / sum_w;
+
+                let orig_r = src_raw[c_p] as f32;
+                let orig_g = src_raw[c_p + 1] as f32;
+                let orig_b = src_raw[c_p + 2] as f32;
+
+                let filt_y = 0.2126 * filt_r + 0.7152 * filt_g + 0.0722 * filt_b;
+                let out_y = y0 + (filt_y - y0) * luma_blend;
+
+                let orig_cr = orig_r - y0;
+                let orig_cg = orig_g - y0;
+                let orig_cb = orig_b - y0;
+
+                let filt_cr = filt_r - filt_y;
+                let filt_cg = filt_g - filt_y;
+                let filt_cb = filt_b - filt_y;
+
+                out_raw[c_p] = (out_y + orig_cr + (filt_cr - orig_cr) * chroma_blend)
+                    .clamp(0.0, 255.0)
+                    .round() as u8;
+                out_raw[c_p + 1] = (out_y + orig_cg + (filt_cg - orig_cg) * chroma_blend)
+                    .clamp(0.0, 255.0)
+                    .round() as u8;
+                out_raw[c_p + 2] = (out_y + orig_cb + (filt_cb - orig_cb) * chroma_blend)
+                    .clamp(0.0, 255.0)
+                    .round() as u8;
+            }
+        }
+    }
+
+    out
 }
 
 fn composite_watermark(base: &mut RgbaImage, wm: &DynamicImage, settings: &WatermarkSettings) {

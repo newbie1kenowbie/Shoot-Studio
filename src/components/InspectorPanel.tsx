@@ -234,14 +234,30 @@ export function InspectorPanel({
                   />
                 </div>
 
+                <div className="pt-4 border-t border-[#222630] space-y-4">
+                  <h3 className="text-xs font-semibold text-[#F3F4F6]">
+                    Detail & Ruisonderdrukking
+                  </h3>
+                  <SliderRow
+                    label="Ruisverwijdering"
+                    value={activePhoto.adjustments.noiseReduction}
+                    min={0}
+                    max={100}
+                    step={1}
+                    formatValue={(v) => (v === 0 ? 'Uit' : `${Math.round(v)}%`)}
+                    onChange={(v) => onChangeAdjustment('noiseReduction', v)}
+                    onReset={() => onChangeAdjustment('noiseReduction', 0)}
+                  />
+                </div>
+
                 <div className="pt-4 border-t border-[#222630] space-y-3">
                   <h3 className="text-xs font-semibold text-[#F3F4F6]">
                     Bulkbewerking
                   </h3>
                   <p className="text-xs text-[#9CA3AF] leading-relaxed">
-                    Pas de huidige instellingen voor belichting, contrast, witbalans en
-                    verzadiging met één klik toe op alle {totalPhotos} foto’s in deze
-                    shoot.
+                    Pas de huidige instellingen voor belichting, contrast, witbalans,
+                    verzadiging en ruisverwijdering met één klik toe op alle{' '}
+                    {totalPhotos} foto’s in deze shoot.
                   </p>
                   <button
                     type="button"
