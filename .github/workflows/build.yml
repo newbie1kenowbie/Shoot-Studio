@@ -68,7 +68,7 @@ jobs:
           releaseBody: 'Automated production release installers for Windows (.exe/.msi) and macOS (.dmg).'
           releaseDraft: true
           prerelease: false
-          useBun: false
+          tauriScript: 'npx tauri'
           args: ${{ matrix.args }}
 
       - name: Upload installer artifacts
