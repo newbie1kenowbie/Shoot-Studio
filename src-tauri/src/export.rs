@@ -18,6 +18,8 @@ pub struct ColorAdjustments {
     pub saturation: f32,  // -100 .. +100
     #[serde(default)]
     pub noise_reduction: f32, // 0 .. 100
+    #[serde(default)]
+    pub sharpening: f32, // 0 .. 100
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -82,6 +84,9 @@ pub fn run_parallel_batch_export(
                 base_rgba = apply_noise_reduction(&base_rgba, item.adjustments.noise_reduction);
             }
             let mut rgba = apply_color_grading(base_rgba, &item.adjustments);
+            if item.adjustments.sharpening > 0.0 {
+                rgba = apply_unsharp_mask(&rgba, item.adjustments.sharpening);
+            }
 
             if let Some(ref wm) = watermark_img {
                 composite_watermark(&mut rgba, wm, &watermark);
@@ -249,6 +254,57 @@ fn apply_noise_reduction(src: &RgbaImage, amount: f32) -> RgbaImage {
                     .clamp(0.0, 255.0)
                     .round() as u8;
             }
+        }
+    }
+
+    out
+}
+
+fn apply_unsharp_mask(src: &RgbaImage, amount: f32) -> RgbaImage {
+    let (w, h) = src.dimensions();
+    if amount <= 0.0 || w < 3 || h < 3 {
+        return src.clone();
+    }
+
+    let strength = (amount / 100.0).clamp(0.0, 1.0) * 1.45;
+    let src_raw = src.as_raw();
+    let mut out = src.clone();
+    let out_raw = out.as_mut();
+
+    for y in 1..(h - 1) {
+        let row = (y * w) as usize;
+        for x in 1..(w - 1) {
+            let idx = row + x as usize;
+            let p = idx * 4;
+
+            let c_luma = 0.2126 * src_raw[p] as f32
+                + 0.7152 * src_raw[p + 1] as f32
+                + 0.0722 * src_raw[p + 2] as f32;
+
+            let mut blur_luma = 0.0f32;
+            for dy in -1i32..=1 {
+                let n_row = ((y as i32 + dy) as u32 * w) as usize;
+                let wy = if dy == 0 { 2.0f32 } else { 1.0f32 };
+                for dx in -1i32..=1 {
+                    let np = (n_row + (x as i32 + dx) as usize) * 4;
+                    let weight = wy * if dx == 0 { 2.0f32 } else { 1.0f32 };
+                    blur_luma += (0.2126 * src_raw[np] as f32
+                        + 0.7152 * src_raw[np + 1] as f32
+                        + 0.0722 * src_raw[np + 2] as f32)
+                        * weight;
+                }
+            }
+            blur_luma /= 16.0;
+
+            let detail = c_luma - blur_luma;
+            if detail.abs() < 2.2 {
+                continue;
+            }
+            let delta = (detail * strength).clamp(-42.0, 42.0);
+
+            out_raw[p] = (src_raw[p] as f32 + delta).clamp(0.0, 255.0).round() as u8;
+            out_raw[p + 1] = (src_raw[p + 1] as f32 + delta).clamp(0.0, 255.0).round() as u8;
+            out_raw[p + 2] = (src_raw[p + 2] as f32 + delta).clamp(0.0, 255.0).round() as u8;
         }
     }
 

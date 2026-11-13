@@ -8,7 +8,7 @@ import {
   RotateCcw,
   X,
 } from 'lucide-react';
-import { renderDenoisedPreviewUrl } from '../services/imageAnalysis';
+import { renderDetailPreviewUrl } from '../services/imageAnalysis';
 import { CullingStatus, PhotoItem, WatermarkSettings } from '../types/studio';
 
 interface PreviewCanvasProps {
@@ -81,9 +81,10 @@ export function PreviewCanvas({
   }, [photo?.id, photo?.previewUrl]);
 
   const noiseLevel = photo?.adjustments.noiseReduction ?? 0;
+  const sharpenLevel = photo?.adjustments.sharpening ?? 0;
 
   useEffect(() => {
-    if (!photo || noiseLevel <= 0 || showOriginal) {
+    if (!photo || (noiseLevel <= 0 && sharpenLevel <= 0) || showOriginal) {
       setDenoisedUrl(null);
       setIsDenoising(false);
       return;
@@ -93,7 +94,11 @@ export function PreviewCanvas({
     setIsDenoising(true);
     const timer = window.setTimeout(async () => {
       try {
-        const nextUrl = await renderDenoisedPreviewUrl(photo.previewUrl, noiseLevel);
+        const nextUrl = await renderDetailPreviewUrl(
+          photo.previewUrl,
+          noiseLevel,
+          sharpenLevel
+        );
         if (!cancelled) {
           setDenoisedUrl(nextUrl);
         }
@@ -112,7 +117,7 @@ export function PreviewCanvas({
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [photo?.id, photo?.previewUrl, noiseLevel, showOriginal]);
+  }, [photo?.id, photo?.previewUrl, noiseLevel, sharpenLevel, showOriginal]);
 
   // Compute exact 5x4 color matrix matching the Rust export pipeline
   const colorMatrixValues = useMemo(() => {
@@ -358,7 +363,7 @@ export function PreviewCanvas({
         )}
         {!showOriginal && isDenoising && (
           <div className="absolute top-4 right-4 px-2.5 py-1 rounded bg-[#111318]/90 border border-[#2C313D] text-[11px] font-medium text-amber-300">
-            Ruisonderdrukking toepassen...
+            Detailverwerking toepassen...
           </div>
         )}
       </div>

@@ -12,7 +12,10 @@ export interface ColorAdjustments {
   whiteBalance: number; // -100 (cool) to +100 (warm)
   saturation: number; // -100 to +100
   noiseReduction: number; // 0 to 100
+  sharpening: number; // 0 to 100
 }
+
+export type EnhanceIntensity = 'subtiel' | 'normaal' | 'krachtig';
 
 export interface WatermarkSettings {
   enabled: boolean;
@@ -68,6 +71,7 @@ export const DEFAULT_ADJUSTMENTS: ColorAdjustments = {
   whiteBalance: 0,
   saturation: 0,
   noiseReduction: 0,
+  sharpening: 0,
 };
 
 export const DEFAULT_WATERMARK: WatermarkSettings = {

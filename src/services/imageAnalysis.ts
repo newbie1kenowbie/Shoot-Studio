@@ -1,4 +1,9 @@
-import { ColorAdjustments, PhotoItem, WatermarkSettings } from '../types/studio';
+import {
+  ColorAdjustments,
+  EnhanceIntensity,
+  PhotoItem,
+  WatermarkSettings,
+} from '../types/studio';
 
 export interface BrowserCullingOutcome {
   id: string;
@@ -312,9 +317,59 @@ export function applyBilateralNoiseReduction(
   }
 }
 
-export async function renderDenoisedPreviewUrl(
-  srcUrl: string,
+/**
+ * Edge-aware luminance Unsharp Mask sharpening (3x3 Gaussian blur residual).
+ * Enhances micro-contrast and optical crispness without halos on flat skies/skin.
+ */
+export function applyUnsharpMask(
+  data: Uint8ClampedArray,
+  w: number,
+  h: number,
   amount: number
+): void {
+  if (amount <= 0 || w < 3 || h < 3) return;
+  const strength = Math.min(1, Math.max(0, amount / 100)) * 1.45;
+  const src = new Uint8ClampedArray(data);
+
+  for (let y = 1; y < h - 1; y++) {
+    const row = y * w;
+    for (let x = 1; x < w - 1; x++) {
+      const idx = row + x;
+      const p = idx * 4;
+
+      const cLuma =
+        0.2126 * src[p] + 0.7152 * src[p + 1] + 0.0722 * src[p + 2];
+
+      let blurLuma = 0;
+      for (let dy = -1; dy <= 1; dy++) {
+        const nRow = (y + dy) * w;
+        const wy = dy === 0 ? 2 : 1;
+        for (let dx = -1; dx <= 1; dx++) {
+          const np = (nRow + x + dx) * 4;
+          const weight = wy * (dx === 0 ? 2 : 1);
+          blurLuma +=
+            (0.2126 * src[np] + 0.7152 * src[np + 1] + 0.0722 * src[np + 2]) *
+            weight;
+        }
+      }
+      blurLuma /= 16;
+
+      const detail = cLuma - blurLuma;
+      // Soft threshold avoids amplifying faint sensor noise in smooth areas
+      if (Math.abs(detail) < 2.2) continue;
+      const delta = Math.max(-42, Math.min(42, detail * strength));
+
+      data[p] = Math.min(255, Math.max(0, Math.round(src[p] + delta)));
+      data[p + 1] = Math.min(255, Math.max(0, Math.round(src[p + 1] + delta)));
+      data[p + 2] = Math.min(255, Math.max(0, Math.round(src[p + 2] + delta)));
+    }
+  }
+}
+
+export async function renderDetailPreviewUrl(
+  srcUrl: string,
+  noiseReduction: number,
+  sharpening: number
 ): Promise<string> {
   const img = await loadHtmlImage(srcUrl);
   const srcW = img.naturalWidth || 1280;
@@ -332,9 +387,201 @@ export async function renderDenoisedPreviewUrl(
 
   ctx.drawImage(img, 0, 0, w, h);
   const imgData = ctx.getImageData(0, 0, w, h);
-  applyBilateralNoiseReduction(imgData.data, w, h, amount);
+  if (noiseReduction > 0) {
+    applyBilateralNoiseReduction(imgData.data, w, h, noiseReduction);
+  }
+  if (sharpening > 0) {
+    applyUnsharpMask(imgData.data, w, h, sharpening);
+  }
   ctx.putImageData(imgData, 0, 0);
   return canvas.toDataURL('image/jpeg', 0.9);
+}
+
+export interface AiEnhancementResult {
+  adjustments: ColorAdjustments;
+  summary: string;
+}
+
+/**
+ * Local pixel-histogram & color-cast AI photo enhancer.
+ * Analyzes tonal percentiles, white-balance cast, chroma saturation,
+ * and high-frequency noise floor to calibrate tailored edits per photo.
+ */
+export async function analyzeAndEnhancePhoto(
+  photo: PhotoItem,
+  intensity: EnhanceIntensity
+): Promise<AiEnhancementResult> {
+  const img = await loadHtmlImage(photo.previewUrl);
+  const w = 320;
+  const h = 240;
+  const canvas = document.createElement('canvas');
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) {
+    return {
+      adjustments: { ...photo.adjustments },
+      summary: 'Standaard profiel behouden',
+    };
+  }
+
+  ctx.drawImage(img, 0, 0, w, h);
+  const { data } = ctx.getImageData(0, 0, w, h);
+
+  const hist = new Uint32Array(256);
+  const lumaGrid = new Float32Array(w * h);
+  let sumR = 0;
+  let sumG = 0;
+  let sumB = 0;
+  let midCount = 0;
+  let chromaSum = 0;
+  const totalPixels = w * h;
+
+  for (let i = 0; i < totalPixels; i++) {
+    const p = i * 4;
+    const r = data[p];
+    const g = data[p + 1];
+    const b = data[p + 2];
+    const y = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+    lumaGrid[i] = y;
+    const yi = Math.min(255, Math.max(0, Math.round(y)));
+    hist[yi]++;
+
+    if (y > 32 && y < 224) {
+      sumR += r;
+      sumG += g;
+      sumB += b;
+      midCount++;
+    }
+
+    const maxC = Math.max(r, g, b);
+    const minC = Math.min(r, g, b);
+    chromaSum += maxC - minC;
+  }
+
+  const percentile = (pct: number) => {
+    const target = totalPixels * pct;
+    let acc = 0;
+    for (let i = 0; i < 256; i++) {
+      acc += hist[i];
+      if (acc >= target) return i;
+    }
+    return 255;
+  };
+
+  const p05 = percentile(0.05);
+  const p50 = percentile(0.5);
+  const p95 = percentile(0.95);
+  const p98 = percentile(0.98);
+
+  // Estimate noise vs texture from Laplacian in mid/shadow regions
+  let noiseAccum = 0;
+  let noiseSamples = 0;
+  for (let y = 1; y < h - 1; y++) {
+    for (let x = 1; x < w - 1; x++) {
+      const idx = y * w + x;
+      const lap = Math.abs(
+        lumaGrid[idx - w] +
+          lumaGrid[idx + w] +
+          lumaGrid[idx - 1] +
+          lumaGrid[idx + 1] -
+          4 * lumaGrid[idx]
+      );
+      if (lap < 28) {
+        noiseAccum += lap;
+        noiseSamples++;
+      }
+    }
+  }
+  const avgMicroNoise = noiseSamples > 0 ? noiseAccum / noiseSamples : 4;
+
+  const mult = intensity === 'subtiel' ? 0.65 : intensity === 'krachtig' ? 1.3 : 1.0;
+
+  // 1. Exposure targeting balanced median (~124) while guarding p98 highlights
+  let exposure = ((124 - p50) / 115) * mult;
+  if (p98 > 246 && exposure > 0) {
+    exposure = Math.min(exposure, 0.1);
+  }
+  if (p95 > 244 && p50 > 135) {
+    exposure = Math.min(exposure, -0.25 * mult);
+  }
+  exposure = Math.round(Math.max(-1.2, Math.min(1.2, exposure)) * 20) / 20;
+
+  // 2. Contrast based on dynamic range spread (p95 - p05)
+  const spread = p95 - p05;
+  let contrast = 0;
+  if (spread < 155) {
+    contrast = Math.round(Math.min(34, ((165 - spread) / 95) * 28 * mult));
+  } else if (spread < 195) {
+    contrast = Math.round(10 * mult);
+  } else {
+    contrast = Math.round(4 * mult);
+  }
+
+  // 3. White balance counter-shift (warm tungsten vs cool shade)
+  let whiteBalance = 0;
+  if (midCount > 0) {
+    const avgR = sumR / midCount;
+    const avgB = sumB / midCount;
+    const warmthBias = (avgR - avgB) / 255;
+    // Gently neutralize heavy color casts while keeping golden hour warmth natural
+    if (Math.abs(warmthBias) > 0.04) {
+      whiteBalance = Math.round(
+        Math.max(-35, Math.min(35, -warmthBias * 145 * mult))
+      );
+    }
+  }
+
+  // 4. Saturation boost based on average chroma
+  const avgChroma = chromaSum / totalPixels;
+  let saturation = 0;
+  if (avgChroma < 36) {
+    saturation = Math.round(Math.min(28, ((42 - avgChroma) / 26) * 20 * mult));
+  } else if (avgChroma < 64) {
+    saturation = Math.round(8 * mult);
+  }
+
+  // 5. Noise Reduction from ISO + micro-noise floor
+  const isoFactor = photo.exif.iso >= 1600 ? 32 : photo.exif.iso >= 800 ? 18 : 0;
+  const rawNoiseEst = Math.round(
+    Math.max(0, (avgMicroNoise - 3.2) * 8.5 + isoFactor) * mult
+  );
+  const noiseReduction = Math.min(75, rawNoiseEst);
+
+  // 6. Smart Sharpening (higher for softer frames, moderated if heavy noise)
+  const sharpnessBase =
+    photo.sharpnessScore !== null && photo.sharpnessScore < 42 ? 38 : 24;
+  const sharpening = Math.min(
+    65,
+    Math.round(Math.max(10, sharpnessBase * mult - noiseReduction * 0.18))
+  );
+
+  const notes: string[] = [];
+  if (Math.abs(exposure) >= 0.1) {
+    notes.push(
+      `Belichting ${exposure > 0 ? '+' : ''}${exposure.toFixed(2)} EV`
+    );
+  }
+  if (contrast > 0) notes.push(`Contrast +${contrast}`);
+  if (Math.abs(whiteBalance) >= 4) {
+    notes.push(
+      `Witbalans ${whiteBalance > 0 ? `+${whiteBalance}` : whiteBalance}`
+    );
+  }
+  if (noiseReduction >= 12) notes.push(`Ruis -${noiseReduction}%`);
+  notes.push(`Verscherping +${sharpening}%`);
+
+  return {
+    adjustments: {
+      exposure,
+      contrast,
+      whiteBalance,
+      saturation,
+      noiseReduction,
+      sharpening,
+    },
+    summary: notes.join(' · '),
+  };
 }
 
 export async function renderGradedPhotoBlob(
@@ -357,13 +604,14 @@ export async function renderGradedPhotoBlob(
 
   const adj: ColorAdjustments = photo.adjustments;
   const needsDenoise = adj.noiseReduction > 0;
+  const needsSharpen = adj.sharpening > 0;
   const needsGrading =
     adj.exposure !== 0 ||
     adj.contrast !== 0 ||
     adj.whiteBalance !== 0 ||
     adj.saturation !== 0;
 
-  if (needsDenoise || needsGrading) {
+  if (needsDenoise || needsSharpen || needsGrading) {
     const imgData = ctx.getImageData(0, 0, w, h);
     const data = imgData.data;
 
@@ -398,6 +646,11 @@ export async function renderGradedPhotoBlob(
         data[i + 2] = Math.min(255, Math.max(0, Math.round(b * 255)));
       }
     }
+
+    if (needsSharpen) {
+      applyUnsharpMask(data, w, h, adj.sharpening);
+    }
+
     ctx.putImageData(imgData, 0, 0);
   }
 

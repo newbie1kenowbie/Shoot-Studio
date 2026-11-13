@@ -10,7 +10,10 @@ import { InspectorPanel } from './components/InspectorPanel';
 import { PreviewCanvas } from './components/PreviewCanvas';
 import { TopToolbar } from './components/TopToolbar';
 import { SAMPLE_SHOOT_NAME, SAMPLE_SHOOT_PHOTOS } from './data/sampleShoot';
-import { createBuiltInStudioWatermarkPng } from './services/imageAnalysis';
+import {
+  analyzeAndEnhancePhoto,
+  createBuiltInStudioWatermarkPng,
+} from './services/imageAnalysis';
 import {
   openSourceFolder,
   pickWatermarkPng,
@@ -23,6 +26,7 @@ import {
   CullingStatus,
   DEFAULT_ADJUSTMENTS,
   DEFAULT_WATERMARK,
+  EnhanceIntensity,
   FilterMode,
   InspectorTab,
   PhotoItem,
@@ -47,6 +51,9 @@ export default function App() {
 
   const [isLoadingFolder, setIsLoadingFolder] = useState(false);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [enhanceIntensity, setEnhanceIntensity] = useState<EnhanceIntensity>('normaal');
+  const [isEnhancing, setIsEnhancing] = useState(false);
+  const [enhanceFeedback, setEnhanceFeedback] = useState<string | null>(null);
   const [minSharpness, setMinSharpness] = useState<number>(34);
   const [duplicateThreshold, setDuplicateThreshold] = useState<number>(14);
   const [syncFeedback, setSyncFeedback] = useState<string | null>(null);
@@ -234,6 +241,51 @@ export default function App() {
     setTimeout(() => setSyncFeedback(null), 4000);
   };
 
+  const handleAiEnhanceActive = async () => {
+    if (!activePhoto) return;
+    setIsEnhancing(true);
+    setEnhanceFeedback(null);
+    try {
+      const res = await analyzeAndEnhancePhoto(activePhoto, enhanceIntensity);
+      setPhotos((prev) =>
+        prev.map((p) =>
+          p.id === activePhoto.id ? { ...p, adjustments: res.adjustments } : p
+        )
+      );
+      setEnhanceFeedback(res.summary);
+    } catch {
+      setBannerError('AI-verbetering kon niet worden uitgevoerd op deze foto.');
+    } finally {
+      setIsEnhancing(false);
+    }
+  };
+
+  const handleAiEnhanceAll = async () => {
+    if (photos.length === 0) return;
+    setIsEnhancing(true);
+    setEnhanceFeedback(null);
+    try {
+      const updatedMap = new Map<string, ColorAdjustments>();
+      for (const p of photos) {
+        const res = await analyzeAndEnhancePhoto(p, enhanceIntensity);
+        updatedMap.set(p.id, res.adjustments);
+      }
+      setPhotos((prev) =>
+        prev.map((p) => ({
+          ...p,
+          adjustments: updatedMap.get(p.id) ?? p.adjustments,
+        }))
+      );
+      setEnhanceFeedback(
+        `${photos.length} foto’s individueel geanalyseerd en verbeterd.`
+      );
+    } catch {
+      setBannerError('AI-verbetering kon niet worden voltooid voor de hele shoot.');
+    } finally {
+      setIsEnhancing(false);
+    }
+  };
+
   const handleRunAiCulling = async () => {
     if (photos.length === 0) return;
     setBannerError(null);
@@ -418,6 +470,12 @@ export default function App() {
           onChangeAdjustment={handleChangeAdjustment}
           onResetAdjustments={handleResetAdjustments}
           onSyncAdjustmentsToAll={handleSyncAdjustmentsToAll}
+          enhanceIntensity={enhanceIntensity}
+          isEnhancing={isEnhancing}
+          enhanceFeedback={enhanceFeedback}
+          onEnhanceIntensityChange={setEnhanceIntensity}
+          onAiEnhanceActive={handleAiEnhanceActive}
+          onAiEnhanceAll={handleAiEnhanceAll}
           onMinSharpnessChange={setMinSharpness}
           onDuplicateThresholdChange={setDuplicateThreshold}
           onRunAiCulling={handleRunAiCulling}
