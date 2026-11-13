@@ -1,14 +1,20 @@
+import { useState } from 'react';
 import {
+  BookmarkPlus,
   Check,
   CopyCheck,
+  FileUp,
   ImagePlus,
+  Layers,
   RotateCcw,
   SlidersHorizontal,
   Sparkles,
   Stamp,
+  Trash2,
   Wand2,
   X,
 } from 'lucide-react';
+import { StudioPreset } from '../data/presets';
 import {
   ColorAdjustments,
   EnhanceIntensity,
@@ -42,6 +48,13 @@ interface InspectorPanelProps {
   onEnhanceIntensityChange: (val: EnhanceIntensity) => void;
   onAiEnhanceActive: () => void;
   onAiEnhanceAll: () => void;
+  presets: StudioPreset[];
+  presetFeedback: string | null;
+  onApplyPreset: (preset: StudioPreset) => void;
+  onApplyPresetToShoot: (preset: StudioPreset) => void;
+  onSaveCurrentAsPreset: (name: string) => void;
+  onDeleteCustomPreset: (presetId: string) => void;
+  onImportXmpPreset: () => void;
   onMinSharpnessChange: (val: number) => void;
   onDuplicateThresholdChange: (val: number) => void;
   onRunAiCulling: () => void;
@@ -120,6 +133,13 @@ export function InspectorPanel({
   onEnhanceIntensityChange,
   onAiEnhanceActive,
   onAiEnhanceAll,
+  presets,
+  presetFeedback,
+  onApplyPreset,
+  onApplyPresetToShoot,
+  onSaveCurrentAsPreset,
+  onDeleteCustomPreset,
+  onImportXmpPreset,
   onMinSharpnessChange,
   onDuplicateThresholdChange,
   onRunAiCulling,
@@ -128,45 +148,68 @@ export function InspectorPanel({
   onUseBuiltInWatermark,
   onUpdateWatermark,
 }: InspectorPanelProps) {
+  const [isSavingPreset, setIsSavingPreset] = useState(false);
+  const [newPresetName, setNewPresetName] = useState('');
+
+  const handleConfirmSavePreset = () => {
+    const trimmed = newPresetName.trim();
+    if (!trimmed) return;
+    onSaveCurrentAsPreset(trimmed);
+    setNewPresetName('');
+    setIsSavingPreset(false);
+  };
+
   return (
-    <aside className="w-[332px] shrink-0 border-l border-[#222630] bg-[#121418] flex flex-col min-h-0">
+    <aside className="w-[368px] shrink-0 border-l border-[#222630] bg-[#121418] flex flex-col min-h-0">
       {/* Segmented Inspector Navigation */}
       <div className="p-3 border-b border-[#222630]">
-        <div className="grid grid-cols-3 gap-1 p-1 rounded-md bg-[#0B0C0E] border border-[#222630]">
+        <div className="grid grid-cols-4 gap-1 p-1 rounded-md bg-[#0B0C0E] border border-[#222630]">
           <button
             type="button"
             onClick={() => onTabChange('bewerken')}
-            className={`inline-flex items-center justify-center gap-1.5 py-1.5 rounded text-xs font-medium transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+            className={`inline-flex items-center justify-center gap-1 py-1.5 px-1 rounded text-[11px] font-medium transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
               activeTab === 'bewerken'
                 ? 'bg-[#212631] text-[#F3F4F6]'
                 : 'text-[#9CA3AF] hover:text-[#E5E7EB]'
             }`}
           >
-            <SlidersHorizontal className="w-3.5 h-3.5" />
+            <SlidersHorizontal className="w-3 h-3 shrink-0" />
             <span>Bewerken</span>
           </button>
           <button
             type="button"
+            onClick={() => onTabChange('presets')}
+            className={`inline-flex items-center justify-center gap-1 py-1.5 px-1 rounded text-[11px] font-medium transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+              activeTab === 'presets'
+                ? 'bg-[#212631] text-[#F3F4F6]'
+                : 'text-[#9CA3AF] hover:text-[#E5E7EB]'
+            }`}
+          >
+            <Layers className="w-3 h-3 shrink-0" />
+            <span>Presets</span>
+          </button>
+          <button
+            type="button"
             onClick={() => onTabChange('culling')}
-            className={`inline-flex items-center justify-center gap-1.5 py-1.5 rounded text-xs font-medium transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+            className={`inline-flex items-center justify-center gap-1 py-1.5 px-1 rounded text-[11px] font-medium transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
               activeTab === 'culling'
                 ? 'bg-[#212631] text-[#F3F4F6]'
                 : 'text-[#9CA3AF] hover:text-[#E5E7EB]'
             }`}
           >
-            <Sparkles className="w-3.5 h-3.5" />
-            <span>AI Culling</span>
+            <Sparkles className="w-3 h-3 shrink-0" />
+            <span>Culling</span>
           </button>
           <button
             type="button"
             onClick={() => onTabChange('watermerk')}
-            className={`inline-flex items-center justify-center gap-1.5 py-1.5 rounded text-xs font-medium transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+            className={`inline-flex items-center justify-center gap-1 py-1.5 px-1 rounded text-[11px] font-medium transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
               activeTab === 'watermerk'
                 ? 'bg-[#212631] text-[#F3F4F6]'
                 : 'text-[#9CA3AF] hover:text-[#E5E7EB]'
             }`}
           >
-            <Stamp className="w-3.5 h-3.5" />
+            <Stamp className="w-3 h-3 shrink-0" />
             <span>Watermerk</span>
           </button>
         </div>
@@ -364,6 +407,147 @@ export function InspectorPanel({
                 </div>
               </>
             )}
+          </>
+        )}
+
+        {activeTab === 'presets' && (
+          <>
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <h2 className="text-xs font-semibold text-[#F3F4F6]">
+                  Lightroom Presets
+                </h2>
+                <span className="text-[11px] font-mono-tabular text-[#9CA3AF]">
+                  {presets.length} stijlen
+                </span>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => setIsSavingPreset((v) => !v)}
+                  disabled={!activePhoto}
+                  className="inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-md bg-[#1D222C] hover:bg-[#262C39] disabled:opacity-50 border border-[#303746] text-xs font-medium text-[#F3F4F6] transition-colors whitespace-nowrap cursor-pointer"
+                >
+                  <BookmarkPlus className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                  <span>Preset opslaan</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={onImportXmpPreset}
+                  className="inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-md bg-[#1D222C] hover:bg-[#262C39] border border-[#303746] text-xs font-medium text-[#F3F4F6] transition-colors whitespace-nowrap cursor-pointer"
+                >
+                  <FileUp className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                  <span>Importeer .XMP</span>
+                </button>
+              </div>
+
+              {isSavingPreset && (
+                <div className="p-3 rounded-md border border-[#2C313D] bg-[#0E1014] space-y-2.5">
+                  <input
+                    type="text"
+                    value={newPresetName}
+                    onChange={(e) => setNewPresetName(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') handleConfirmSavePreset();
+                      if (e.key === 'Escape') setIsSavingPreset(false);
+                    }}
+                    placeholder="Naam voor nieuwe preset..."
+                    className="w-full px-2.5 py-1.5 rounded bg-[#161920] border border-[#2C313D] text-xs text-[#F3F4F6] placeholder-[#6B7280] focus:outline-none focus:border-amber-500"
+                    autoFocus
+                  />
+                  <div className="flex items-center justify-end gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setIsSavingPreset(false)}
+                      className="px-2.5 py-1 rounded text-xs text-[#9CA3AF] hover:text-[#F3F4F6] cursor-pointer"
+                    >
+                      Annuleren
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleConfirmSavePreset}
+                      disabled={!newPresetName.trim()}
+                      className="px-3 py-1 rounded bg-amber-500 hover:bg-amber-400 disabled:opacity-40 text-[#0B0C0E] text-xs font-semibold cursor-pointer"
+                    >
+                      Opslaan
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {presetFeedback && (
+                <div className="flex items-center gap-1.5 text-xs text-emerald-400">
+                  <Check className="w-3.5 h-3.5 shrink-0" />
+                  <span>{presetFeedback}</span>
+                </div>
+              )}
+            </div>
+
+            <div className="space-y-2 pt-1">
+              {presets.map((preset) => {
+                const isActive = activePhoto?.activePresetId === preset.id;
+                const { exposure, contrast, whiteBalance, saturation } =
+                  preset.adjustments;
+                return (
+                  <div
+                    key={preset.id}
+                    className={`group rounded-md border transition-colors ${
+                      isActive
+                        ? 'border-amber-500/70 bg-[#1B1D23]'
+                        : 'border-[#232732] bg-[#161920] hover:border-[#353B4B]'
+                    }`}
+                  >
+                    <div className="p-3 flex items-start justify-between gap-2">
+                      <button
+                        type="button"
+                        onClick={() => onApplyPreset(preset)}
+                        disabled={!activePhoto}
+                        className="flex-1 text-left min-w-0 cursor-pointer disabled:cursor-not-allowed"
+                      >
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs font-medium text-[#F3F4F6] truncate">
+                            {preset.name}
+                          </span>
+                          {isActive && (
+                            <Check className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                          )}
+                        </div>
+                        <div className="mt-1 text-[11px] text-[#9CA3AF] font-mono-tabular truncate">
+                          {preset.category} · {exposure >= 0 ? '+' : ''}
+                          {exposure.toFixed(2)} EV · C {contrast >= 0 ? '+' : ''}
+                          {contrast} · WB {whiteBalance >= 0 ? '+' : ''}
+                          {whiteBalance} · Sat {saturation >= 0 ? '+' : ''}
+                          {saturation}
+                        </div>
+                      </button>
+
+                      <div className="flex items-center gap-1 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => onApplyPresetToShoot(preset)}
+                          disabled={totalPhotos === 0}
+                          title="Toepassen op hele shoot"
+                          className="px-2 py-1 rounded bg-[#212631] hover:bg-[#2B3140] text-[11px] font-medium text-[#E5E7EB] transition-colors whitespace-nowrap cursor-pointer"
+                        >
+                          Op shoot
+                        </button>
+                        {preset.isCustom && (
+                          <button
+                            type="button"
+                            onClick={() => onDeleteCustomPreset(preset.id)}
+                            title="Aangepaste preset verwijderen"
+                            className="p-1 rounded text-[#9CA3AF] hover:text-rose-400 hover:bg-[#2A171A] transition-colors cursor-pointer"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
           </>
         )}
 

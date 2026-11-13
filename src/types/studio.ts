@@ -4,7 +4,7 @@ export type FilterMode = 'alle' | 'geselecteerd' | 'afgekeurd';
 
 export type ViewMode = 'loupe' | 'grid';
 
-export type InspectorTab = 'bewerken' | 'culling' | 'watermerk';
+export type InspectorTab = 'bewerken' | 'presets' | 'culling' | 'watermerk';
 
 export interface ColorAdjustments {
   exposure: number; // -2.0 to +2.0 EV
@@ -52,6 +52,7 @@ export interface PhotoItem {
   dHash: string | null;
   duplicateGroupId: string | null;
   cullReason: string | null;
+  activePresetId?: string | null;
   adjustments: ColorAdjustments;
   exif: ExifSummary;
   sourceFile?: File;

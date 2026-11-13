@@ -11,6 +11,13 @@ import { PreviewCanvas } from './components/PreviewCanvas';
 import { TopToolbar } from './components/TopToolbar';
 import { SAMPLE_SHOOT_NAME, SAMPLE_SHOOT_PHOTOS } from './data/sampleShoot';
 import {
+  BUILTIN_PRESETS,
+  loadCustomPresets,
+  parseLightroomXmpPreset,
+  saveCustomPresets,
+  StudioPreset,
+} from './data/presets';
+import {
   analyzeAndEnhancePhoto,
   createBuiltInStudioWatermarkPng,
 } from './services/imageAnalysis';
@@ -57,7 +64,16 @@ export default function App() {
   const [minSharpness, setMinSharpness] = useState<number>(34);
   const [duplicateThreshold, setDuplicateThreshold] = useState<number>(14);
   const [syncFeedback, setSyncFeedback] = useState<string | null>(null);
+  const [customPresets, setCustomPresets] = useState<StudioPreset[]>(() =>
+    loadCustomPresets()
+  );
+  const [presetFeedback, setPresetFeedback] = useState<string | null>(null);
   const [bannerError, setBannerError] = useState<string | null>(null);
+
+  const presets = useMemo(
+    () => [...customPresets, ...BUILTIN_PRESETS],
+    [customPresets]
+  );
 
   const [watermark, setWatermark] = useState<WatermarkSettings>(DEFAULT_WATERMARK);
 
@@ -210,7 +226,11 @@ export default function App() {
     setPhotos((prev) =>
       prev.map((p) =>
         p.id === activePhoto.id
-          ? { ...p, adjustments: { ...p.adjustments, [key]: value } }
+          ? {
+              ...p,
+              activePresetId: null,
+              adjustments: { ...p.adjustments, [key]: value },
+            }
           : p
       )
     );
@@ -222,7 +242,11 @@ export default function App() {
     setPhotos((prev) =>
       prev.map((p) =>
         p.id === activePhoto.id
-          ? { ...p, adjustments: { ...DEFAULT_ADJUSTMENTS } }
+          ? {
+              ...p,
+              activePresetId: null,
+              adjustments: { ...DEFAULT_ADJUSTMENTS },
+            }
           : p
       )
     );
@@ -234,11 +258,105 @@ export default function App() {
     setPhotos((prev) =>
       prev.map((p) => ({
         ...p,
+        activePresetId: activePhoto.activePresetId ?? null,
         adjustments: { ...sourceAdj },
       }))
     );
     setSyncFeedback(`Bewerking gekopieerd naar alle ${photos.length} foto’s.`);
     setTimeout(() => setSyncFeedback(null), 4000);
+  };
+
+  const handleApplyPreset = (preset: StudioPreset) => {
+    if (!activePhoto) return;
+    setPhotos((prev) =>
+      prev.map((p) =>
+        p.id === activePhoto.id
+          ? {
+              ...p,
+              activePresetId: preset.id,
+              adjustments: { ...preset.adjustments },
+            }
+          : p
+      )
+    );
+    setPresetFeedback(`"${preset.name}" toegepast op ${activePhoto.fileName}.`);
+    setTimeout(() => setPresetFeedback(null), 3500);
+  };
+
+  const handleApplyPresetToShoot = (preset: StudioPreset) => {
+    if (photos.length === 0) return;
+    setPhotos((prev) =>
+      prev.map((p) => ({
+        ...p,
+        activePresetId: preset.id,
+        adjustments: { ...preset.adjustments },
+      }))
+    );
+    setPresetFeedback(
+      `"${preset.name}" toegepast op alle ${photos.length} foto’s.`
+    );
+    setTimeout(() => setPresetFeedback(null), 4000);
+  };
+
+  const handleSaveCurrentAsPreset = (name: string) => {
+    if (!activePhoto) return;
+    const newPreset: StudioPreset = {
+      id: `custom-${Date.now()}`,
+      name,
+      category: 'Eigen preset',
+      isCustom: true,
+      adjustments: { ...activePhoto.adjustments },
+    };
+    const nextCustom = [newPreset, ...customPresets];
+    setCustomPresets(nextCustom);
+    saveCustomPresets(nextCustom);
+    setPhotos((prev) =>
+      prev.map((p) =>
+        p.id === activePhoto.id ? { ...p, activePresetId: newPreset.id } : p
+      )
+    );
+    setPresetFeedback(`Preset "${name}" opgeslagen.`);
+    setTimeout(() => setPresetFeedback(null), 3500);
+  };
+
+  const handleDeleteCustomPreset = (presetId: string) => {
+    const nextCustom = customPresets.filter((p) => p.id !== presetId);
+    setCustomPresets(nextCustom);
+    saveCustomPresets(nextCustom);
+  };
+
+  const handleImportXmpPreset = () => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.xmp,.XMP';
+    input.multiple = true;
+    input.onchange = async () => {
+      const files = Array.from(input.files || []);
+      if (files.length === 0) return;
+      const imported: StudioPreset[] = [];
+      for (const file of files) {
+        try {
+          const text = await file.text();
+          imported.push(parseLightroomXmpPreset(text, file.name));
+        } catch {
+          // Skip invalid XMP cleanly
+        }
+      }
+      if (imported.length === 0) {
+        setBannerError('Geen geldige Lightroom .XMP-presets gevonden.');
+        return;
+      }
+      const nextCustom = [...imported, ...customPresets];
+      setCustomPresets(nextCustom);
+      saveCustomPresets(nextCustom);
+      if (activePhoto) {
+        handleApplyPreset(imported[0]);
+      } else {
+        setPresetFeedback(`${imported.length} .XMP-preset(s) geïmporteerd.`);
+        setTimeout(() => setPresetFeedback(null), 3500);
+      }
+    };
+    input.click();
   };
 
   const handleAiEnhanceActive = async () => {
@@ -476,6 +594,13 @@ export default function App() {
           onEnhanceIntensityChange={setEnhanceIntensity}
           onAiEnhanceActive={handleAiEnhanceActive}
           onAiEnhanceAll={handleAiEnhanceAll}
+          presets={presets}
+          presetFeedback={presetFeedback}
+          onApplyPreset={handleApplyPreset}
+          onApplyPresetToShoot={handleApplyPresetToShoot}
+          onSaveCurrentAsPreset={handleSaveCurrentAsPreset}
+          onDeleteCustomPreset={handleDeleteCustomPreset}
+          onImportXmpPreset={handleImportXmpPreset}
           onMinSharpnessChange={setMinSharpness}
           onDuplicateThresholdChange={setDuplicateThreshold}
           onRunAiCulling={handleRunAiCulling}
